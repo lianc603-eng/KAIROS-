@@ -10,7 +10,7 @@ st.title("⚡ Kairós MKT - Centro de Control")
 
 DB_NAME = "kairos.db"
 
-# --- BASE DE DATOS Y MIGRACIÓN ---
+# --- BASE DE DATOS Y MIGRACIÓN DE COLUMNAS ---
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
@@ -43,6 +43,11 @@ def init_db():
             detalle TEXT
         )
     ''')
+    try:
+        c.execute("ALTER TABLE eventos ADD COLUMN estado_tarea TEXT DEFAULT 'Pendiente'")
+    except sqlite3.OperationalError:
+        pass
+
     conn.commit()
     conn.close()
 
@@ -67,11 +72,11 @@ def guardar_cliente(nombre, paquete, fecha_pago, inicio, fin):
     c.execute("INSERT INTO clientes (nombre, paquete, fecha_pago, inicio, fin, estado) VALUES (?, ?, ?, ?, ?, 'Activo')",
               (nombre, paquete, str(fecha_pago), str(inicio), str(fin)))
     
-    c.execute("INSERT INTO eventos (fecha, cliente, tipo, formato, detalle) VALUES (?, ?, ?, ?, ?)",
+    c.execute("INSERT INTO eventos (fecha, cliente, tipo, formato, detalle, estado_tarea) VALUES (?, ?, ?, ?, ?, 'Cumplido')",
               (str(fecha_pago), nombre, "Pago Recibido", "N/A", f"Pago inicial - Paquete {paquete}"))
-    c.execute("INSERT INTO eventos (fecha, cliente, tipo, formato, detalle) VALUES (?, ?, ?, ?, ?)",
+    c.execute("INSERT INTO eventos (fecha, cliente, tipo, formato, detalle, estado_tarea) VALUES (?, ?, ?, ?, ?, 'Cumplido')",
               (str(inicio), nombre, "Inicio de Servicio", "N/A", f"Inicio de ciclo: {paquete}"))
-    c.execute("INSERT INTO eventos (fecha, cliente, tipo, formato, detalle) VALUES (?, ?, ?, ?, ?)",
+    c.execute("INSERT INTO eventos (fecha, cliente, tipo, formato, detalle, estado_tarea) VALUES (?, ?, ?, ?, ?, 'Pendiente')",
               (str(fin), nombre, "Fin de Ciclo", "N/A", f"Corte de ciclo: {paquete}"))
     
     conn.commit()
@@ -86,11 +91,11 @@ def renovar_cliente_manual(id_cliente, nombre, paquete, fecha_nuevo_pago):
     c.execute("UPDATE clientes SET fecha_pago = ?, inicio = ?, fin = ?, estado = 'Activo' WHERE id = ?", 
               (str(fecha_nuevo_pago), str(nuevo_inicio), str(nuevo_fin), id_cliente))
     
-    c.execute("INSERT INTO eventos (fecha, cliente, tipo, formato, detalle) VALUES (?, ?, ?, ?, ?)",
+    c.execute("INSERT INTO eventos (fecha, cliente, tipo, formato, detalle, estado_tarea) VALUES (?, ?, ?, ?, ?, 'Cumplido')",
               (str(fecha_nuevo_pago), nombre, "Pago Recibido", "N/A", f"Renovación confirmada - Paquete {paquete}"))
-    c.execute("INSERT INTO eventos (fecha, cliente, tipo, formato, detalle) VALUES (?, ?, ?, ?, ?)",
+    c.execute("INSERT INTO eventos (fecha, cliente, tipo, formato, detalle, estado_tarea) VALUES (?, ?, ?, ?, ?, 'Cumplido')",
               (str(nuevo_inicio), nombre, "Inicio de Servicio", "N/A", f"Nuevo ciclo iniciado: {paquete}"))
-    c.execute("INSERT INTO eventos (fecha, cliente, tipo, formato, detalle) VALUES (?, ?, ?, ?, ?)",
+    c.execute("INSERT INTO eventos (fecha, cliente, tipo, formato, detalle, estado_tarea) VALUES (?, ?, ?, ?, ?, 'Pendiente')",
               (str(nuevo_fin), nombre, "Fin de Ciclo", "N/A", f"Corte de nuevo ciclo: {paquete}"))
     
     conn.commit()
@@ -99,16 +104,23 @@ def renovar_cliente_manual(id_cliente, nombre, paquete, fecha_nuevo_pago):
 def guardar_evento(fecha, cliente, tipo, formato, detalle):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    c.execute("INSERT INTO eventos (fecha, cliente, tipo, formato, detalle) VALUES (?, ?, ?, ?, ?)",
+    c.execute("INSERT INTO eventos (fecha, cliente, tipo, formato, detalle, estado_tarea) VALUES (?, ?, ?, ?, ?, 'Pendiente')",
               (str(fecha), cliente, tipo, formato, detalle))
     conn.commit()
     conn.close()
 
-def actualizar_evento(id_evento, fecha, cliente, tipo, formato, detalle):
+def cambiar_estado_evento(id_evento, nuevo_estado):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    c.execute("UPDATE eventos SET fecha=?, cliente=?, tipo=?, formato=?, detalle=? WHERE id=?",
-              (str(fecha), cliente, tipo, formato, detalle, id_evento))
+    c.execute("UPDATE eventos SET estado_tarea=? WHERE id=?", (nuevo_estado, id_evento))
+    conn.commit()
+    conn.close()
+
+def actualizar_evento(id_evento, fecha, cliente, tipo, formato, detalle, estado_tarea):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("UPDATE eventos SET fecha=?, cliente=?, tipo=?, formato=?, detalle=?, estado_tarea=? WHERE id=?",
+              (str(fecha), cliente, tipo, formato, detalle, estado_tarea, id_evento))
     conn.commit()
     conn.close()
 
@@ -124,11 +136,11 @@ def agendar_plan_completo(nombre_cliente, fechas_grabacion, calendario_pubs):
     c = conn.cursor()
     
     for i, f in enumerate(fechas_grabacion, 1):
-        c.execute("INSERT INTO eventos (fecha, cliente, tipo, formato, detalle) VALUES (?, ?, ?, ?, ?)",
+        c.execute("INSERT INTO eventos (fecha, cliente, tipo, formato, detalle, estado_tarea) VALUES (?, ?, ?, ?, ?, 'Pendiente')",
                   (str(f), nombre_cliente, "Día de Grabación", "N/A", f"Sesión de rodaje #{i}"))
         
     for item in calendario_pubs:
-        c.execute("INSERT INTO eventos (fecha, cliente, tipo, formato, detalle) VALUES (?, ?, ?, ?, ?)",
+        c.execute("INSERT INTO eventos (fecha, cliente, tipo, formato, detalle, estado_tarea) VALUES (?, ?, ?, ?, ?, 'Pendiente')",
                   (str(item['fecha']), nombre_cliente, "Publicación", item['formato'], item['detalle']))
         
     conn.commit()
@@ -148,7 +160,6 @@ PAQUETES_KAIROS = {
 modo = st.sidebar.radio(
     "Navegación", 
     [
-        "📊 Dashboard & Calendario Visual", 
         "👥 Calendario por Cliente", 
         "✏️ Editar / Eliminar Eventos", 
         "🔄 Gestión de Renovaciones", 
@@ -158,89 +169,10 @@ modo = st.sidebar.radio(
 )
 
 # ----------------------------------------------------
-# VISTA 1: DASHBOARD & CALENDARIO VISUAL GRÁFICO
+# VISTA 1: CALENDARIO POR CLIENTE (CON CALENDARIO GRÁFICO EN ESPAÑOL Y CHECKBOXES)
 # ----------------------------------------------------
-if modo == "📊 Dashboard & Calendario Visual":
-    st.header("📊 Dashboard Operativo & Calendario Total - Kairós MKT")
-    
-    # 1. METRICAS / DASHBOARD GENERAL
-    if not df_clientes.empty:
-        total_clientes = len(df_clientes)
-        ingresos_est = sum([PAQUETES_KAIROS.get(p, {}).get("precio", 0) for p in df_clientes["paquete"]])
-        
-        # Conteo de eventos este mes
-        mes_actual = date.today().strftime("%Y-%m")
-        df_mes = df_eventos[df_eventos["fecha"].str.startswith(mes_actual)] if not df_eventos.empty else pd.DataFrame()
-        
-        grabaciones_mes = len(df_mes[df_mes["tipo"] == "Día de Grabación"]) if not df_mes.empty else 0
-        pubs_mes = len(df_mes[df_mes["tipo"] == "Publicación"]) if not df_mes.empty else 0
-        
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Clientes Activos", total_clientes)
-        c2.metric("Ingresos Mensuales", f"${ingresos_est:,} MXN")
-        c3.metric("Grabaciones este Mes", grabaciones_mes)
-        c4.metric("Publicaciones este Mes", pubs_mes)
-    else:
-        st.info("Agrega tu primer cliente para ver las métricas del dashboard.")
-
-    st.divider()
-    
-    # 2. CALENDARIO VISUAL
-    st.subheader("🗓️ Calendario Interactivo")
-    
-    if not df_eventos.empty:
-        col_f1, col_f2 = st.columns([2, 1])
-        with col_f1:
-            filtro_cli = st.multiselect("Filtrar por Cliente", options=df_eventos["cliente"].unique(), default=df_eventos["cliente"].unique())
-        
-        df_ev_filtrado = df_eventos[df_eventos["cliente"].isin(filtro_cli)]
-        
-        # Mapeo de colores para el Calendario Visual
-        COLOR_MAP = {
-            "Día de Grabación": "#ef4444",   # Rojo
-            "Publicación": "#3b82f6",        # Azul
-            "Pago Recibido": "#10b981",      # Verde
-            "Inicio de Servicio": "#8b5cf6",  # Morado
-            "Fin de Ciclo": "#f59e0b",       # Naranja
-            "Reunión con Cliente": "#ec4899" # Rosa
-        }
-        
-        calendar_events = []
-        for _, row in df_ev_filtrado.iterrows():
-            color = COLOR_MAP.get(row["tipo"], "#6b7280")
-            titulo = f"{row['cliente']}: {row['detalle']}" if row['formato'] == 'N/A' else f"{row['cliente']} ({row['formato']}): {row['detalle']}"
-            
-            calendar_events.append({
-                "id": str(row["id"]),
-                "title": titulo,
-                "start": row["fecha"],
-                "end": row["fecha"],
-                "color": color
-            })
-            
-        calendar_options = {
-            "editable": False,
-            "selectable": True,
-            "headerToolbar": {
-                "left": "today prev,next",
-                "center": "title",
-                "right": "dayGridMonth,timeGridWeek,listMonth"
-            },
-            "initialView": "dayGridMonth"
-        }
-        
-        calendar(events=calendar_events, options=calendar_options, key="kairos_full_calendar")
-        
-        # Leyenda de Colores
-        st.caption("🎨 **Leyenda de Colores**: 🔴 Grabación | 🔵 Publicación | 🟢 Pago Confirmado | 🟣 Inicio de Servicio | 🟠 Fin de Ciclo | 💗 Reunión")
-    else:
-        st.info("No hay eventos agendados para desplegar en el calendario visual.")
-
-# ----------------------------------------------------
-# VISTA 2: CALENDARIO POR CLIENTE
-# ----------------------------------------------------
-elif modo == "👥 Calendario por Cliente":
-    st.header("👤 Control y Avance de Entregables por Cliente")
+if modo == "👥 Calendario por Cliente":
+    st.header("👤 Control, Avance y Calendario por Cliente")
     
     if not df_clientes.empty:
         nombres_clientes = df_clientes["nombre"].tolist()
@@ -249,6 +181,7 @@ elif modo == "👥 Calendario por Cliente":
         info_c = df_clientes[df_clientes["nombre"] == cliente_sel].iloc[0]
         pkg_info = PAQUETES_KAIROS.get(info_c["paquete"], {"precio": 0, "posts": 0, "reels": 0, "historias": 0, "total": 0})
         
+        # Alerta de corte
         fecha_fin_str = str(info_c["fin"])
         if fecha_fin_str:
             try:
@@ -266,37 +199,107 @@ elif modo == "👥 Calendario por Cliente":
         col4.metric("Inicio Ciclo", str(info_c["inicio"]))
         col5.metric("Fecha Corte", str(info_c["fin"]))
         
+        # Conteo de entregables
         ev_cliente = df_eventos[(df_eventos["cliente"] == cliente_sel) & (df_eventos["tipo"] == "Publicación")] if not df_eventos.empty else pd.DataFrame()
-        posts_p = len(ev_cliente[ev_cliente["formato"] == "Post Gráfico"]) if not ev_cliente.empty else 0
-        reels_p = len(ev_cliente[ev_cliente["formato"] == "Reel"]) if not ev_cliente.empty else 0
-        hist_p = len(ev_cliente[ev_cliente["formato"] == "Historia"]) if not ev_cliente.empty else 0
         
-        st.markdown("#### 📊 Progreso de Entregables de este Ciclo")
+        # Filtrar solo cumplidos vs meta
+        ev_cumplidos = ev_cliente[ev_cliente["estado_tarea"] == "Cumplido"] if not ev_cliente.empty else pd.DataFrame()
+        
+        posts_p = len(ev_cumplidos[ev_cumplidos["formato"] == "Post Gráfico"]) if not ev_cumplidos.empty else 0
+        reels_p = len(ev_cumplidos[ev_cumplidos["formato"] == "Reel"]) if not ev_cumplidos.empty else 0
+        hist_p = len(ev_cumplidos[ev_cumplidos["formato"] == "Historia"]) if not ev_cumplidos.empty else 0
+        
+        st.markdown("#### 📊 Entregables CUMPLIDOS de este Ciclo")
         m1, m2, m3 = st.columns(3)
         m1.metric("Post Gráficos", f"{posts_p} / {pkg_info['posts']}")
         m2.metric("Reels", f"{reels_p} / {pkg_info['reels']}")
         m3.metric("Historias", f"{hist_p} / {pkg_info['historias']}")
         
         st.divider()
-        st.subheader("🗓️ Cronograma de Actividades")
-        df_c_ev = df_eventos[df_eventos["cliente"] == cliente_sel].sort_values("fecha") if not df_eventos.empty else pd.DataFrame()
+
+        # --- CALENDARIO VISUAL EN ESPAÑOL POR CLIENTE ---
+        st.subheader(f"🗓️ Calendario Visual de {cliente_sel}")
         
-        st.dataframe(
-            df_c_ev[["fecha", "tipo", "formato", "detalle"]],
-            column_config={
-                "fecha": st.column_config.DateColumn("Fecha", format="DD/MM/YYYY"),
-                "tipo": "Categoría",
-                "formato": "Formato",
-                "detalle": "Descripción"
-            },
-            use_container_width=True,
-            hide_index=True
-        )
+        df_ev_cliente = df_eventos[df_eventos["cliente"] == cliente_sel] if not df_eventos.empty else pd.DataFrame()
+        
+        if not df_ev_cliente.empty:
+            COLOR_MAP = {
+                "Día de Grabación": "#ef4444",   # Rojo
+                "Publicación": "#3b82f6",        # Azul
+                "Pago Recibido": "#10b981",      # Verde
+                "Inicio de Servicio": "#8b5cf6",  # Morado
+                "Fin de Ciclo": "#f59e0b",       # Naranja
+                "Reunión con Cliente": "#ec4899" # Rosa
+            }
+            
+            calendar_events = []
+            for _, row in df_ev_cliente.iterrows():
+                # Si está cumplida, asignarle un color gris neutro
+                if row.get("estado_tarea") == "Cumplido":
+                    color = "#6b7280" # Gris (Completado)
+                    prefix = "✅ "
+                else:
+                    color = COLOR_MAP.get(row["tipo"], "#3b82f6")
+                    prefix = "⏳ "
+                    
+                titulo = f"{prefix}{row['detalle']}" if row['formato'] == 'N/A' else f"{prefix}[{row['formato']}] {row['detalle']}"
+                
+                calendar_events.append({
+                    "id": str(row["id"]),
+                    "title": titulo,
+                    "start": row["fecha"],
+                    "end": row["fecha"],
+                    "color": color
+                })
+                
+            # Opciones traducidas 100% al español
+            calendar_options = {
+                "locale": "es",
+                "editable": False,
+                "selectable": True,
+                "headerToolbar": {
+                    "left": "today prev,next",
+                    "center": "title",
+                    "right": "dayGridMonth,listMonth"
+                },
+                "buttonText": {
+                    "today": "Hoy",
+                    "month": "Mes",
+                    "list": "Lista"
+                },
+                "initialView": "dayGridMonth"
+            }
+            
+            calendar(events=calendar_events, options=calendar_options, key=f"cal_{cliente_sel}")
+            st.caption("🎨 **Leyenda**: 🔴 Grabación | 🔵 Publicación | 🟢 Pago | 🟣 Inicio | 🟠 Corte | 🔘 Gris (Tarea Cumplida)")
+        else:
+            st.info("No hay actividades registradas para este cliente.")
+
+        st.divider()
+
+        # --- TABLA INTERACTIVA CON CONTROL DE CUMPLIMIENTO (MARCAR COMO CUMPLIDO) ---
+        st.subheader("📋 Lista de Actividades y Marcador de Cumplimiento")
+        
+        if not df_ev_cliente.empty:
+            df_display = df_ev_cliente.sort_values("fecha")
+            
+            # Selector rápido para cambiar estado
+            for idx, row in df_display.iterrows():
+                col_info, col_btn = st.columns([4, 1])
+                with col_info:
+                    check_icon = "✅" if row["estado_tarea"] == "Cumplido" else "⏳"
+                    st.write(f"**{row['fecha']}** | {check_icon} **{row['tipo']}** ({row['formato']}) - {row['detalle']}")
+                with col_btn:
+                    nuevo_st = "Pendiente" if row["estado_tarea"] == "Cumplido" else "Cumplido"
+                    btn_label = "Desmarcar" if row["estado_tarea"] == "Cumplido" else "Marcar Cumplido"
+                    if st.button(btn_label, key=f"btn_st_{row['id']}"):
+                        cambiar_estado_evento(row["id"], nuevo_st)
+                        st.rerun()
     else:
         st.info("Primero registra un cliente en la sección 'Registrar Cliente / Evento'.")
 
 # ----------------------------------------------------
-# VISTA 3: EDITAR O ELIMINAR EVENTOS
+# VISTA 2: EDITAR O ELIMINAR EVENTOS
 # ----------------------------------------------------
 elif modo == "✏️ Editar / Eliminar Eventos":
     st.header("✏️ Modificar o Eliminar Actividades del Calendario")
@@ -305,7 +308,7 @@ elif modo == "✏️ Editar / Eliminar Eventos":
     if not df_eventos.empty:
         df_eventos_sorted = df_eventos.sort_values("fecha", ascending=False)
         opciones_eventos = {
-            row["id"]: f"ID {row['id']} | {row['fecha']} | {row['cliente']} | {row['tipo']} - {row['detalle']}" 
+            row["id"]: f"ID {row['id']} | {row['fecha']} | {row['cliente']} | [{row['estado_tarea']}] {row['tipo']} - {row['detalle']}" 
             for _, row in df_eventos_sorted.iterrows()
         }
         
@@ -328,9 +331,10 @@ elif modo == "✏️ Editar / Eliminar Eventos":
                     
                 c_fecha = st.date_input("Fecha", value=f_val)
                 c_det = st.text_input("Detalle / Tema", value=str(evento_info["detalle"]))
+                c_est = st.selectbox("Estado de Cumplimiento", ["Pendiente", "Cumplido"], index=0 if evento_info.get("estado_tarea") == "Pendiente" else 1)
                 
                 if st.form_submit_button("💾 Guardar Cambios"):
-                    actualizar_evento(id_sel, c_fecha, c_cli, c_tipo, c_fmt, c_det)
+                    actualizar_evento(id_sel, c_fecha, c_cli, c_tipo, c_fmt, c_det, c_est)
                     st.success("¡Actividad actualizada correctamente!")
                     st.rerun()
 
@@ -345,7 +349,7 @@ elif modo == "✏️ Editar / Eliminar Eventos":
         st.info("No hay eventos en la base de datos para modificar o eliminar.")
 
 # ----------------------------------------------------
-# VISTA 4: RENOVACIÓN MANUAL
+# VISTA 3: RENOVACIÓN MANUAL
 # ----------------------------------------------------
 elif modo == "🔄 Gestión de Renovaciones":
     st.header("🔄 Renovación Manual de Clientes")
@@ -367,7 +371,7 @@ elif modo == "🔄 Gestión de Renovaciones":
         st.warning("No hay clientes registrados en la base de datos.")
 
 # ----------------------------------------------------
-# VISTA 5: CATÁLOGO DE PAQUETES
+# VISTA 4: CATÁLOGO DE PAQUETES
 # ----------------------------------------------------
 elif modo == "📦 Catálogo de Paquetes":
     st.header("📦 Paquetes Oficiales Kairós MKT")
@@ -383,7 +387,7 @@ elif modo == "📦 Catálogo de Paquetes":
             st.info(f"**Total**: {datos['total']} piezas al mes")
 
 # ----------------------------------------------------
-# VISTA 6: REGISTRO CON SUGERENCIAS DE DISTRIBUCIÓN
+# VISTA 5: REGISTRO CON SUGERENCIAS DE DISTRIBUCIÓN
 # ----------------------------------------------------
 elif modo == "➕ Registrar Cliente / Evento":
     st.header("⚙️ Gestión de Datos y Agendamiento")
@@ -479,11 +483,11 @@ elif modo == "➕ Registrar Cliente / Evento":
 
         col_a, col_b, col_c = st.columns(3)
         with col_a:
-            st.info(f"**Opción A: Distribución Equilibrada (Lun-Mié-Vie)**\n\n🎥 **Grabación**: {', '.join([g.strftime('%d/%m') for g in g_opt_a])}\n\n📲 **Ritmo**: Publicaciones constantes de 3 a 4 veces por semana a lo largo del mes.")
+            st.info(f"**Opción A: Distribución Equilibrada (Lun-Mié-Vie)**\n\n🎥 **Grabación**: {', '.join([g.strftime('%d/%m') for g in g_opt_a])}\n\n📲 **Ritmo**: Publicaciones constantes a lo largo del mes.")
         with col_b:
-            st.info(f"**Opción B: Fast-Track (Carga Inicial)**\n\n🎥 **Grabación**: {', '.join([g.strftime('%d/%m') for g in g_opt_b])}\n\n📲 **Ritmo**: Foco intensivo en los primeros 15 días tras la grabación.")
+            st.info(f"**Opción B: Fast-Track (Carga Inicial)**\n\n🎥 **Grabación**: {', '.join([g.strftime('%d/%m') for g in g_opt_b])}\n\n📲 **Ritmo**: Foco intensivo en las primeras dos semanas.")
         with col_c:
-            st.info(f"**Opción C: Foco Comercial (Jue-Vie-Sáb)**\n\n🎥 **Grabación**: {', '.join([g.strftime('%d/%m') for g in g_opt_c])}\n\n📲 **Ritmo**: Concentración de lanzamientos hacia los fines de semana.")
+            st.info(f"**Opción C: Foco Comercial (Jue-Vie-Sáb)**\n\n🎥 **Grabación**: {', '.join([g.strftime('%d/%m') for g in g_opt_c])}\n\n📲 **Ritmo**: Publicaciones enfocadas en fines de semana.")
 
         with st.form("form_confirmar_plan"):
             plan_elegido = st.radio("Selecciona qué estrategia aplicar para agendar todo automáticamente:", ["Opción A (Equilibrada)", "Opción B (Fast-Track)", "Opción C (Foco Comercial)", "Solo registrar cliente (Agendar manualmente)"])
