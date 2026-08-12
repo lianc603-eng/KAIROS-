@@ -9,12 +9,10 @@ st.title("⚡ Kairós MKT - Centro de Control")
 
 DB_NAME = "kairos.db"
 
-# --- INICIALIZACIÓN DE BASE DE DATOS CON MIGRACIÓN DE COLUMNAS ---
+# --- BASE DE DATOS Y MIGRACIÓN ---
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    
-    # Crear tabla de clientes si no existe
     c.execute('''
         CREATE TABLE IF NOT EXISTS clientes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -24,8 +22,6 @@ def init_db():
             fin TEXT NOT NULL
         )
     ''')
-    
-    # Migrar columnas de versiones anteriores si es necesario
     try:
         c.execute("ALTER TABLE clientes ADD COLUMN fecha_pago TEXT NOT NULL DEFAULT ''")
     except sqlite3.OperationalError:
@@ -36,7 +32,6 @@ def init_db():
     except sqlite3.OperationalError:
         pass
 
-    # Crear tabla de eventos si no existe
     c.execute('''
         CREATE TABLE IF NOT EXISTS eventos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -52,7 +47,7 @@ def init_db():
 
 init_db()
 
-# --- FUNCIONES DE CONSULTA Y ESCRITURA ---
+# --- FUNCIONES DE BASE DE DATOS ---
 def get_clientes():
     conn = sqlite3.connect(DB_NAME)
     df = pd.read_sql_query("SELECT * FROM clientes", conn)
@@ -71,13 +66,13 @@ def guardar_cliente(nombre, paquete, fecha_pago, inicio, fin):
     c.execute("INSERT INTO clientes (nombre, paquete, fecha_pago, inicio, fin, estado) VALUES (?, ?, ?, ?, ?, 'Activo')",
               (nombre, paquete, str(fecha_pago), str(inicio), str(fin)))
     
-    # Eventos iniciales del ciclo
+    # Eventos base del ciclo
     c.execute("INSERT INTO eventos (fecha, cliente, tipo, formato, detalle) VALUES (?, ?, ?, ?, ?)",
               (str(fecha_pago), nombre, "Pago Recibido", "N/A", f"Pago inicial - Paquete {paquete}"))
     c.execute("INSERT INTO eventos (fecha, cliente, tipo, formato, detalle) VALUES (?, ?, ?, ?, ?)",
               (str(inicio), nombre, "Inicio de Servicio", "N/A", f"Inicio de ciclo: {paquete}"))
     c.execute("INSERT INTO eventos (fecha, cliente, tipo, formato, detalle) VALUES (?, ?, ?, ?, ?)",
-              (str(fin), nombre, "Fin de Ciclo", "N/A", f"Corte de ciclo (Pendiente renovación): {paquete}"))
+              (str(fin), nombre, "Fin de Ciclo", "N/A", f"Corte de ciclo: {paquete}"))
     
     conn.commit()
     conn.close()
@@ -85,15 +80,11 @@ def guardar_cliente(nombre, paquete, fecha_pago, inicio, fin):
 def renovar_cliente_manual(id_cliente, nombre, paquete, fecha_nuevo_pago):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    
     nuevo_inicio = fecha_nuevo_pago
     nuevo_fin = fecha_nuevo_pago + timedelta(days=30)
     
-    c.execute('''
-        UPDATE clientes 
-        SET fecha_pago = ?, inicio = ?, fin = ?, estado = 'Activo' 
-        WHERE id = ?
-    ''', (str(fecha_nuevo_pago), str(nuevo_inicio), str(nuevo_fin), id_cliente))
+    c.execute("UPDATE clientes SET fecha_pago = ?, inicio = ?, fin = ?, estado = 'Activo' WHERE id = ?", 
+              (str(fecha_nuevo_pago), str(nuevo_inicio), str(nuevo_fin), id_cliente))
     
     c.execute("INSERT INTO eventos (fecha, cliente, tipo, formato, detalle) VALUES (?, ?, ?, ?, ?)",
               (str(fecha_nuevo_pago), nombre, "Pago Recibido", "N/A", f"Renovación confirmada - Paquete {paquete}"))
@@ -113,21 +104,59 @@ def guardar_evento(fecha, cliente, tipo, formato, detalle):
     conn.commit()
     conn.close()
 
-# Cargar datos desde SQLite
+def actualizar_evento(id_evento, fecha, cliente, tipo, formato, detalle):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("UPDATE eventos SET fecha=?, cliente=?, tipo=?, formato=?, detalle=? WHERE id=?",
+              (str(fecha), cliente, tipo, formato, detalle, id_evento))
+    conn.commit()
+    conn.close()
+
+def eliminar_evento(id_evento):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("DELETE FROM eventos WHERE id=?", (id_evento,))
+    conn.commit()
+    conn.close()
+
+def agendar_plan_completo(nombre_cliente, fechas_grabacion, calendario_pubs):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    
+    # Agendar Grabaciones
+    for i, f in enumerate(fechas_grabacion, 1):
+        c.execute("INSERT INTO eventos (fecha, cliente, tipo, formato, detalle) VALUES (?, ?, ?, ?, ?)",
+                  (str(f), nombre_cliente, "Día de Grabación", "N/A", f"Sesión de rodaje #{i}"))
+        
+    # Agendar Publicaciones
+    for item in calendario_pubs:
+        c.execute("INSERT INTO eventos (fecha, cliente, tipo, formato, detalle) VALUES (?, ?, ?, ?, ?)",
+                  (str(item['fecha']), nombre_cliente, "Publicación", item['formato'], item['detalle']))
+        
+    conn.commit()
+    conn.close()
+
+# Cargar datos
 df_clientes = get_clientes()
 df_eventos = get_eventos()
 
-# --- CATÁLOGO OFICIAL KAIRÓS MKT ---
 PAQUETES_KAIROS = {
-    "Actividad Constante": {"precio": 2500, "posts": 10, "reels": 4, "historias": 4, "total": 18},
-    "Impulso": {"precio": 3400, "posts": 13, "reels": 6, "historias": 7, "total": 26},
-    "Dominio Total": {"precio": 4100, "posts": 16, "reels": 9, "historias": 10, "total": 35}
+    "Actividad Constante": {"precio": 2500, "posts": 10, "reels": 4, "historias": 4, "total": 18, "sesiones": 1},
+    "Impulso": {"precio": 3400, "posts": 13, "reels": 6, "historias": 7, "total": 26, "sesiones": 1},
+    "Dominio Total": {"precio": 4100, "posts": 16, "reels": 9, "historias": 10, "total": 35, "sesiones": 2}
 }
 
 # --- NAVEGACIÓN ---
 modo = st.sidebar.radio(
     "Navegación", 
-    ["📅 Calendario Agencia (Kairós)", "👥 Calendario por Cliente", "🔄 Gestión de Renovaciones", "📦 Catálogo de Paquetes", "➕ Registrar Cliente / Evento"]
+    [
+        "📅 Calendario Agencia (Kairós)", 
+        "👥 Calendario por Cliente", 
+        "✏️ Editar / Eliminar Eventos", 
+        "🔄 Gestión de Renovaciones", 
+        "📦 Catálogo de Paquetes", 
+        "➕ Registrar Cliente / Evento"
+    ]
 )
 
 # ----------------------------------------------------
@@ -150,8 +179,9 @@ if modo == "📅 Calendario Agencia (Kairós)":
         ].sort_values("fecha")
         
         st.dataframe(
-            df_filtrado[["fecha", "cliente", "tipo", "formato", "detalle"]], 
+            df_filtrado[["id", "fecha", "cliente", "tipo", "formato", "detalle"]], 
             column_config={
+                "id": "ID",
                 "fecha": st.column_config.DateColumn("Fecha", format="DD/MM/YYYY"),
                 "cliente": "Cliente",
                 "tipo": "Evento",
@@ -177,7 +207,7 @@ elif modo == "👥 Calendario por Cliente":
         info_c = df_clientes[df_clientes["nombre"] == cliente_sel].iloc[0]
         pkg_info = PAQUETES_KAIROS.get(info_c["paquete"], {"precio": 0, "posts": 0, "reels": 0, "historias": 0, "total": 0})
         
-        # Verificar vencimiento
+        # Alerta de corte
         fecha_fin_str = str(info_c["fin"])
         if fecha_fin_str:
             try:
@@ -195,7 +225,7 @@ elif modo == "👥 Calendario por Cliente":
         col4.metric("Inicio Ciclo", str(info_c["inicio"]))
         col5.metric("Fecha Corte", str(info_c["fin"]))
         
-        # Métricas de entregables
+        # Conteo de entregables
         ev_cliente = df_eventos[(df_eventos["cliente"] == cliente_sel) & (df_eventos["tipo"] == "Publicación")] if not df_eventos.empty else pd.DataFrame()
         posts_p = len(ev_cliente[ev_cliente["formato"] == "Post Gráfico"]) if not ev_cliente.empty else 0
         reels_p = len(ev_cliente[ev_cliente["formato"] == "Reel"]) if not ev_cliente.empty else 0
@@ -226,7 +256,56 @@ elif modo == "👥 Calendario por Cliente":
         st.info("Primero registra un cliente en la sección 'Registrar Cliente / Evento'.")
 
 # ----------------------------------------------------
-# VISTA 3: RENOVACIÓN MANUAL
+# VISTA 3: EDITAR O ELIMINAR EVENTOS
+# ----------------------------------------------------
+elif modo == "✏️ Editar / Eliminar Eventos":
+    st.header("✏️ Modificar o Eliminar Actividades del Calendario")
+    st.caption("Selecciona cualquier actividad existente para corregir sus datos o eliminarla.")
+    
+    if not df_eventos.empty:
+        df_eventos_sorted = df_eventos.sort_values("fecha", ascending=False)
+        opciones_eventos = {
+            row["id"]: f"ID {row['id']} | {row['fecha']} | {row['cliente']} | {row['tipo']} - {row['detalle']}" 
+            for _, row in df_eventos_sorted.iterrows()
+        }
+        
+        id_sel = st.selectbox("Selecciona la actividad a gestionar", list(opciones_eventos.keys()), format_func=lambda x: opciones_eventos[x])
+        evento_info = df_eventos[df_eventos["id"] == id_sel].iloc[0]
+        
+        col_ed, col_del = st.columns([2, 1])
+        
+        with col_ed:
+            st.subheader("Modificar Datos de la Actividad")
+            with st.form("form_editar_evento"):
+                c_cli = st.selectbox("Cliente", df_clientes["nombre"].tolist() if not df_clientes.empty else [evento_info["cliente"]], index=df_clientes["nombre"].tolist().index(evento_info["cliente"]) if evento_info["cliente"] in df_clientes["nombre"].tolist() else 0)
+                c_tipo = st.selectbox("Tipo de Evento", ["Publicación", "Día de Grabación", "Reunión con Cliente", "Pago Recibido", "Inicio de Servicio", "Fin de Ciclo"], index=["Publicación", "Día de Grabación", "Reunión con Cliente", "Pago Recibido", "Inicio de Servicio", "Fin de Ciclo"].index(evento_info["tipo"]) if evento_info["tipo"] in ["Publicación", "Día de Grabación", "Reunión con Cliente", "Pago Recibido", "Inicio de Servicio", "Fin de Ciclo"] else 0)
+                c_fmt = st.selectbox("Formato", ["N/A", "Post Gráfico", "Reel", "Historia"], index=["N/A", "Post Gráfico", "Reel", "Historia"].index(evento_info["formato"]) if evento_info["formato"] in ["N/A", "Post Gráfico", "Reel", "Historia"] else 0)
+                
+                try:
+                    f_val = datetime.strptime(str(evento_info["fecha"]), "%Y-%m-%d").date()
+                except ValueError:
+                    f_val = date.today()
+                    
+                c_fecha = st.date_input("Fecha", value=f_val)
+                c_det = st.text_input("Detalle / Tema", value=str(evento_info["detalle"]))
+                
+                if st.form_submit_button("💾 Guardar Cambios"):
+                    actualizar_evento(id_sel, c_fecha, c_cli, c_tipo, c_fmt, c_det)
+                    st.success("¡Actividad actualizada correctamente!")
+                    st.rerun()
+
+        with col_del:
+            st.subheader("Zona de Eliminación")
+            st.warning("⚠️ Esta acción borrará el evento de forma permanente.")
+            if st.button("❌ Eliminar esta Actividad", type="primary"):
+                eliminar_evento(id_sel)
+                st.success("Actividad eliminada con éxito.")
+                st.rerun()
+    else:
+        st.info("No hay eventos en la base de datos para modificar o eliminar.")
+
+# ----------------------------------------------------
+# VISTA 4: RENOVACIÓN MANUAL
 # ----------------------------------------------------
 elif modo == "🔄 Gestión de Renovaciones":
     st.header("🔄 Renovación Manual de Clientes")
@@ -248,7 +327,7 @@ elif modo == "🔄 Gestión de Renovaciones":
         st.warning("No hay clientes registrados en la base de datos.")
 
 # ----------------------------------------------------
-# VISTA 4: CATÁLOGO DE PAQUETES
+# VISTA 5: CATÁLOGO DE PAQUETES
 # ----------------------------------------------------
 elif modo == "📦 Catálogo de Paquetes":
     st.header("📦 Paquetes Oficiales Kairós MKT")
@@ -260,17 +339,18 @@ elif modo == "📦 Catálogo de Paquetes":
             st.write(f"🖼️ **{datos['posts']}** Post Gráficos")
             st.write(f"🎬 **{datos['reels']}** Reels")
             st.write(f"📲 **{datos['historias']}** Historias")
+            st.write(f"🎥 **{datos['sesiones']}** Sesión(es) de Grabación al mes")
             st.info(f"**Total**: {datos['total']} piezas al mes")
 
 # ----------------------------------------------------
-# VISTA 5: REGISTRO DE CLIENTES Y EVENTOS
+# VISTA 6: REGISTRO CON SUGERENCIAS DE DISTRIBUCIÓN
 # ----------------------------------------------------
 elif modo == "➕ Registrar Cliente / Evento":
     st.header("⚙️ Gestión de Datos y Agendamiento")
-    tab1, tab2 = st.tabs(["➕ Agregar Evento / Publicación", "👤 Registrar Nuevo Cliente"])
+    tab1, tab2 = st.tabs(["➕ Agregar Evento / Publicación", "👤 Registrar Nuevo Cliente + Sugerencia de Plan"])
     
     with tab1:
-        st.subheader("Agendar Evento o Publicación")
+        st.subheader("Agendar Evento o Publicación Individual")
         if not df_clientes.empty:
             with st.form("form_evento"):
                 cliente_ev = st.selectbox("Cliente", df_clientes["nombre"].tolist())
@@ -287,21 +367,106 @@ elif modo == "➕ Registrar Cliente / Evento":
             st.warning("Debes registrar al menos un cliente antes de agendar actividades.")
 
     with tab2:
-        st.subheader("Registrar Cliente")
-        with st.form("form_cliente"):
-            nombre_c = st.text_input("Nombre de la Marca / Empresa")
-            paquete_c = st.selectbox("Paquete Contratado", list(PAQUETES_KAIROS.keys()))
-            f_pago = st.date_input("Día que se recibió el Pago", value=date.today())
+        st.subheader("Registrar Cliente y Elegir Plan de Publicación")
+        
+        nombre_c = st.text_input("Nombre de la Marca / Empresa")
+        paquete_c = st.selectbox("Paquete Contratado", list(PAQUETES_KAIROS.keys()))
+        f_pago = st.date_input("Día que se recibió el Pago / Inicio de Servicio", value=date.today())
+        
+        f_inicio = f_pago
+        f_fin = f_pago + timedelta(days=30)
+        
+        pkg = PAQUETES_KAIROS[paquete_c]
+        st.caption(f"📅 Ciclo contractual: **{f_inicio.strftime('%d/%m/%Y')}** al **{f_fin.strftime('%d/%m/%Y')}**.")
+        st.info(f" Entregables del paquete **{paquete_c}**: {pkg['posts']} Posts, {pkg['reels']} Reels, {pkg['historias']} Historias | **{pkg['sesiones']} Sesión(es) de Grabación**.")
+
+        # --- CÁLCULO DE GRABACIONES Y PUBLICACIONES ---
+        st.markdown("---")
+        st.markdown("### 💡 3 Sugerencias de Estrategia de Publicación y Grabación")
+        
+        # Grabaciones según el paquete
+        if pkg['sesiones'] == 1:
+            g_opt_a = [f_inicio + timedelta(days=3)]
+            g_opt_b = [f_inicio + timedelta(days=2)]
+            g_opt_c = [f_inicio + timedelta(days=4)]
+        else: # Dominio Total (2 sesiones)
+            g_opt_a = [f_inicio + timedelta(days=3), f_inicio + timedelta(days=17)]
+            g_opt_b = [f_inicio + timedelta(days=2), f_inicio + timedelta(days=14)]
+            g_opt_c = [f_inicio + timedelta(days=4), f_inicio + timedelta(days=18)]
+
+        # Lógica de distribución de publicaciones (3 Estrategias)
+        def generar_calendario_pubs(estrategia, fecha_base, pkg_data):
+            list_pubs = []
+            total_posts = pkg_data['posts']
+            total_reels = pkg_data['reels']
+            total_hist = pkg_data['historias']
             
-            f_inicio = f_pago
-            f_fin = f_pago + timedelta(days=30)
+            # Estrategia A: Lunes / Miércoles / Viernes (Reparto constante)
+            if estrategia == "A":
+                # Intercalamos posts, reels e historias
+                dias_offset = [5, 7, 9, 12, 14, 16, 19, 21, 23, 26, 28]
+                for i in range(min(total_posts, len(dias_offset))):
+                    list_pubs.append({"fecha": fecha_base + timedelta(days=dias_offset[i % len(dias_offset)]), "formato": "Post Gráfico", "detalle": f"Post Gráfico #{i+1}"})
+                for i in range(total_reels):
+                    offset = (i * 4) + 6
+                    list_pubs.append({"fecha": fecha_base + timedelta(days=min(offset, 28)), "formato": "Reel", "detalle": f"Reel #{i+1}"})
+                for i in range(total_hist):
+                    offset = (i * 3) + 5
+                    list_pubs.append({"fecha": fecha_base + timedelta(days=min(offset, 29)), "formato": "Historia", "detalle": f"Historia #{i+1}"})
+
+            # Estrategia B: Carga Inicial Fast-Track (Avanza fuerte semanas 1 y 2)
+            elif estrategia == "B":
+                for i in range(total_posts):
+                    offset = (i * 2) + 4
+                    list_pubs.append({"fecha": fecha_base + timedelta(days=min(offset, 28)), "formato": "Post Gráfico", "detalle": f"Post Gráfico #{i+1}"})
+                for i in range(total_reels):
+                    offset = (i * 3) + 4
+                    list_pubs.append({"fecha": fecha_base + timedelta(days=min(offset, 27)), "formato": "Reel", "detalle": f"Reel #{i+1}"})
+                for i in range(total_hist):
+                    offset = (i * 2) + 3
+                    list_pubs.append({"fecha": fecha_base + timedelta(days=min(offset, 28)), "formato": "Historia", "detalle": f"Historia #{i+1}"})
+
+            # Estrategia C: Enfoque Fin de Semana (Jueves a Sábado)
+            elif estrategia == "C":
+                for i in range(total_posts):
+                    offset = (i * 2.5) + 6
+                    list_pubs.append({"fecha": fecha_base + timedelta(days=min(int(offset), 29)), "formato": "Post Gráfico", "detalle": f"Post Gráfico #{i+1}"})
+                for i in range(total_reels):
+                    offset = (i * 3.5) + 6
+                    list_pubs.append({"fecha": fecha_base + timedelta(days=min(int(offset), 28)), "formato": "Reel", "detalle": f"Reel #{i+1}"})
+                for i in range(total_hist):
+                    offset = (i * 2.8) + 5
+                    list_pubs.append({"fecha": fecha_base + timedelta(days=min(int(offset), 29)), "formato": "Historia", "detalle": f"Historia #{i+1}"})
+
+            return list_pubs
+
+        cal_a = generar_calendario_pubs("A", f_inicio, pkg)
+        cal_b = generar_calendario_pubs("B", f_inicio, pkg)
+        cal_c = generar_calendario_pubs("C", f_inicio, pkg)
+
+        col_a, col_b, col_c = st.columns(3)
+        with col_a:
+            st.info(f"**Opción A: Distribución Equilibrada (Lun-Mié-Vie)**\n\n🎥 **Grabación**: {', '.join([g.strftime('%d/%m') for g in g_opt_a])}\n\n📲 **Ritmo**: Publicaciones constantes de 3 a 4 veces por semana a lo largo del mes.")
+        with col_b:
+            st.info(f"**Opción B: Fast-Track (Carga Inicial)**\n\n🎥 **Grabación**: {', '.join([g.strftime('%d/%m') for g in g_opt_b])}\n\n📲 **Ritmo**: Foco intensivo en los primeros 15 días tras la grabación.")
+        with col_c:
+            st.info(f"**Opción C: Foco Comercial (Jue-Vie-Sáb)**\n\n🎥 **Grabación**: {', '.join([g.strftime('%d/%m') for g in g_opt_c])}\n\n📲 **Ritmo**: Concentración de lanzamientos hacia los fines de semana.")
+
+        with st.form("form_confirmar_plan"):
+            plan_elegido = st.radio("Selecciona qué estrategia aplicar para agendar todo automáticamente:", ["Opción A (Equilibrada)", "Opción B (Fast-Track)", "Opción C (Foco Comercial)", "Solo registrar cliente (Agendar manualmente)"])
             
-            st.caption(f"📅 Ciclo inicial: Del **{f_inicio.strftime('%d/%m/%Y')}** al **{f_fin.strftime('%d/%m/%Y')}**.")
-            
-            if st.form_submit_button("Registrar Cliente"):
+            if st.form_submit_button("🚀 Registrar Cliente y Agendar Calendario Completo"):
                 if nombre_c.strip():
                     guardar_cliente(nombre_c, paquete_c, f_pago, f_inicio, f_fin)
-                    st.success(f"Cliente '{nombre_c}' registrado correctamente.")
+                    
+                    if "Opción A" in plan_elegido:
+                        agendar_plan_completo(nombre_c, g_opt_a, cal_a)
+                    elif "Opción B" in plan_elegido:
+                        agendar_plan_completo(nombre_c, g_opt_b, cal_b)
+                    elif "Opción C" in plan_elegido:
+                        agendar_plan_completo(nombre_c, g_opt_c, cal_c)
+                        
+                    st.success(f"¡Cliente '{nombre_c}' registrado correctamente con su calendario agendado!")
                     st.rerun()
                 else:
-                    st.error("Por favor ingresa un nombre válido para la marca.")
+                    st.error("Por favor ingresa un nombre para la empresa.")
