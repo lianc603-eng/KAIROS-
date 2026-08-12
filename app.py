@@ -7,13 +7,11 @@ st.set_page_config(page_title="Kairós MKT - Control & Calendarios", layout="wid
 
 st.title("⚡ Kairós MKT - Centro de Control")
 
-# --- BASE DE DATOS LOCAL (SQLITE) ---
 DB_NAME = "kairos.db"
 
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    # Tabla de clientes
     c.execute('''
         CREATE TABLE IF NOT EXISTS clientes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -25,7 +23,6 @@ def init_db():
             estado TEXT DEFAULT 'Activo'
         )
     ''')
-    # Tabla de eventos
     c.execute('''
         CREATE TABLE IF NOT EXISTS eventos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -61,37 +58,34 @@ def guardar_cliente(nombre, paquete, fecha_pago, inicio, fin):
     
     # Eventos iniciales
     c.execute("INSERT INTO eventos (fecha, cliente, tipo, formato, detalle) VALUES (?, ?, ?, ?, ?)",
-              (str(fecha_pago), nombre, "Pago Recibido", "N/A", f"Pago inicial del paquete {paquete}"))
+              (str(fecha_pago), nombre, "Pago Recibido", "N/A", f"Pago inicial - Paquete {paquete}"))
     c.execute("INSERT INTO eventos (fecha, cliente, tipo, formato, detalle) VALUES (?, ?, ?, ?, ?)",
               (str(inicio), nombre, "Inicio de Servicio", "N/A", f"Inicio de ciclo: {paquete}"))
     c.execute("INSERT INTO eventos (fecha, cliente, tipo, formato, detalle) VALUES (?, ?, ?, ?, ?)",
-              (str(fin), nombre, "Fin / Renovación", "N/A", f"Corte del periodo: {paquete}"))
+              (str(fin), nombre, "Fin de Ciclo", "N/A", f"Corte de ciclo (Pendiente renovación): {paquete}"))
     
     conn.commit()
     conn.close()
 
-def renovar_cliente(id_cliente, nombre, paquete, nueva_fecha_pago):
+def renovar_cliente_manual(id_cliente, nombre, paquete, fecha_nuevo_pago):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     
-    # Nuevo ciclo: inicia el día de pago y dura 30 días
-    nuevo_inicio = nueva_fecha_pago
-    nuevo_fin = nueva_fecha_pago + timedelta(days=30)
+    nuevo_inicio = fecha_nuevo_pago
+    nuevo_fin = fecha_nuevo_pago + timedelta(days=30)
     
-    # Actualizar ficha del cliente
     c.execute('''
         UPDATE clientes 
         SET fecha_pago = ?, inicio = ?, fin = ?, estado = 'Activo' 
         WHERE id = ?
-    ''', (str(nueva_fecha_pago), str(nuevo_inicio), str(nuevo_fin), id_cliente))
+    ''', (str(fecha_nuevo_pago), str(nuevo_inicio), str(nuevo_fin), id_cliente))
     
-    # Registrar los nuevos hitos en el calendario
     c.execute("INSERT INTO eventos (fecha, cliente, tipo, formato, detalle) VALUES (?, ?, ?, ?, ?)",
-              (str(nueva_fecha_pago), nombre, "Pago Recibido", "N/A", f"Renovación de pago: {paquete}"))
+              (str(fecha_nuevo_pago), nombre, "Pago Recibido", "N/A", f"Renovación confirmada - Paquete {paquete}"))
     c.execute("INSERT INTO eventos (fecha, cliente, tipo, formato, detalle) VALUES (?, ?, ?, ?, ?)",
-              (str(nuevo_inicio), nombre, "Inicio de Servicio", "N/A", f"Nuevo ciclo renovado: {paquete}"))
+              (str(nuevo_inicio), nombre, "Inicio de Servicio", "N/A", f"Nuevo ciclo iniciado: {paquete}"))
     c.execute("INSERT INTO eventos (fecha, cliente, tipo, formato, detalle) VALUES (?, ?, ?, ?, ?)",
-              (str(nuevo_fin), nombre, "Fin / Renovación", "N/A", f"Corte de ciclo renovado: {paquete}"))
+              (str(nuevo_fin), nombre, "Fin de Ciclo", "N/A", f"Corte de nuevo ciclo: {paquete}"))
     
     conn.commit()
     conn.close()
@@ -117,7 +111,7 @@ PAQUETES_KAIRÓS = {
 # --- NAVEGACIÓN ---
 modo = st.sidebar.radio(
     "Navegación", 
-    ["📅 Calendario Agencia (Kairós)", "👥 Calendario por Cliente", "🔄 Renovar Servicio", "📦 Catálogo de Paquetes", "➕ Registrar Cliente / Evento"]
+    ["📅 Calendario Agencia (Kairós)", "👥 Calendario por Cliente", "🔄 Gestión de Renovaciones", "📦 Catálogo de Paquetes", "➕ Registrar Cliente / Evento"]
 )
 
 # ----------------------------------------------------
@@ -125,7 +119,7 @@ modo = st.sidebar.radio(
 # ----------------------------------------------------
 if modo == "📅 Calendario Agencia (Kairós)":
     st.header("🗓️ Vista General de Operaciones - Kairós MKT")
-    st.caption("Consolidado de pagos, grabaciones, reuniones, entregas y renovaciones.")
+    st.caption("Consolidado de pagos, grabaciones, reuniones, entregas y cortes de ciclo.")
     
     if not df_eventos.empty:
         col1, col2 = st.columns(2)
@@ -152,10 +146,10 @@ if modo == "📅 Calendario Agencia (Kairós)":
             hide_index=True
         )
     else:
-        st.info("No hay eventos registrados en la base de datos todavía.")
+        st.info("No hay eventos registrados aún.")
 
 # ----------------------------------------------------
-# VISTA 2: CALENDARIO POR CLIENTE & RENOVACIÓN RÁPIDA
+# VISTA 2: CALENDARIO POR CLIENTE
 # ----------------------------------------------------
 elif modo == "👥 Calendario por Cliente":
     st.header("👤 Control y Avance de Entregables por Cliente")
@@ -167,14 +161,20 @@ elif modo == "👥 Calendario por Cliente":
         info_c = df_clientes[df_clientes["nombre"] == cliente_sel].iloc[0]
         pkg_info = PAQUETES_KAIRÓS.get(info_c["paquete"], {"precio": 0, "posts": 0, "reels": 0, "historias": 0, "total": 0})
         
-        # Ficha del servicio
+        # Verificar estado respecto a la fecha de corte
+        fecha_fin_dt = datetime.strptime(info_c["fin"], "%Y-%m-%d").date()
+        esta_vencido = date.today() > fecha_fin_dt
+        
         st.subheader(f"📌 Estado del Servicio: {cliente_sel}")
+        if esta_vencido:
+            st.warning("⚠️ **ATENCIÓN**: El ciclo contratado ha finalizado. Esperando confirmación de pago para renovar.")
+        
         col1, col2, col3, col4, col5 = st.columns(5)
         col1.metric("Paquete", info_c["paquete"])
         col2.metric("Inversión", f"${pkg_info['precio']:,} MXN")
         col3.metric("Último Pago", str(info_c["fecha_pago"]))
         col4.metric("Inicio Ciclo", str(info_c["inicio"]))
-        col5.metric("Próximo Corte", str(info_c["fin"]))
+        col5.metric("Fecha Corte", str(info_c["fin"]))
         
         # Conteo de Entregables
         ev_cliente = df_eventos[(df_eventos["cliente"] == cliente_sel) & (df_eventos["tipo"] == "Publicación")] if not df_eventos.empty else pd.DataFrame()
@@ -182,7 +182,7 @@ elif modo == "👥 Calendario por Cliente":
         reels_p = len(ev_cliente[ev_cliente["formato"] == "Reel"]) if not ev_cliente.empty else 0
         hist_p = len(ev_cliente[ev_cliente["formato"] == "Historia"]) if not ev_cliente.empty else 0
         
-        st.markdown("#### 📊 Progreso del Paquete Contratado")
+        st.markdown("#### 📊 Progreso de Entregables de este Ciclo")
         m1, m2, m3 = st.columns(3)
         m1.metric("Post Gráficos", f"{posts_p} / {pkg_info['posts']}")
         m2.metric("Reels", f"{reels_p} / {pkg_info['reels']}")
@@ -198,7 +198,7 @@ elif modo == "👥 Calendario por Cliente":
                 "fecha": st.column_config.DateColumn("Fecha", format="DD/MM/YYYY"),
                 "tipo": "Categoría",
                 "formato": "Formato",
-                "detalle": "Descripción de la Actividad / Contenido"
+                "detalle": "Descripción"
             },
             use_container_width=True,
             hide_index=True
@@ -207,23 +207,23 @@ elif modo == "👥 Calendario por Cliente":
         st.info("Primero registra un cliente en la sección 'Registrar Cliente / Evento'.")
 
 # ----------------------------------------------------
-# VISTA 3: RENOVACIÓN DE SERVICIO
+# VISTA 3: RENOVACIÓN MANUAL DE SERVICIO
 # ----------------------------------------------------
-elif modo == "🔄 Renovar Servicio":
-    st.header("🔄 Renovación de Mes / Contrato de Clientes")
-    st.caption("Registra el nuevo pago y extiende automáticamente el periodo del cliente por 30 días más.")
+elif modo == "🔄 Gestión de Renovaciones":
+    st.header("🔄 Renovación Manual de Clientes")
+    st.caption("Usa esta sección únicamente cuando el cliente haya confirmado y realizado su pago correspondiente.")
     
     if not df_clientes.empty:
         with st.form("form_renovar"):
-            client_to_renew = st.selectbox("Selecciona el Cliente que Renovó", df_clientes["nombre"].tolist())
-            fecha_nuevo_pago = st.date_input("Fecha en que realizaró el pago", value=date.today())
+            client_to_renew = st.selectbox("Selecciona el Cliente a Renovar", df_clientes["nombre"].tolist())
+            fecha_nuevo_pago = st.date_input("Fecha en que se confirmó el pago", value=date.today())
             
             info_ren = df_clientes[df_clientes["nombre"] == client_to_renew].iloc[0]
-            st.info(f"El cliente actualmente tiene contratado el paquete **{info_ren['paquete']}**.")
+            st.info(f"Cliente: **{client_to_renew}** | Paquete: **{info_ren['paquete']}** | Fecha de corte actual: **{info_ren['fin']}**")
             
-            if st.form_submit_button("Confirmar Renovación (+30 Días)"):
-                renovar_cliente(info_ren["id"], client_to_renew, info_ren["paquete"], fecha_nuevo_pago)
-                st.success(f"¡Servicio de '{client_to_renew}' renovado con éxito! Se agendó el nuevo ciclo a partir del {fecha_nuevo_pago.strftime('%d/%m/%Y')}.")
+            if st.form_submit_button("Confirmar Pago y Renovar (+30 Días)"):
+                renovar_cliente_manual(info_ren["id"], client_to_renew, info_ren["paquete"], fecha_nuevo_pago)
+                st.success(f"¡Servicio de '{client_to_renew}' renovado manualmente! El nuevo ciclo se extendió 30 días a partir del {fecha_nuevo_pago.strftime('%d/%m/%Y')}.")
                 st.rerun()
     else:
         st.warning("No hay clientes registrados en la base de datos.")
@@ -255,10 +255,10 @@ elif modo == "➕ Registrar Cliente / Evento":
         if not df_clientes.empty:
             with st.form("form_evento"):
                 cliente_ev = st.selectbox("Cliente", df_clientes["nombre"].tolist())
-                tipo_ev = st.selectbox("Tipo de Evento", ["Publicación", "Día de Grabación", "Reunión con Cliente", "Pago Recibido", "Inicio de Servicio", "Fin / Renovación"])
+                tipo_ev = st.selectbox("Tipo de Evento", ["Publicación", "Día de Grabación", "Reunión con Cliente", "Pago Recibido", "Inicio de Servicio", "Fin de Ciclo"])
                 formato_ev = st.selectbox("Formato", ["N/A", "Post Gráfico", "Reel", "Historia"])
                 fecha_ev = st.date_input("Fecha", value=date.today())
-                detalle_ev = st.text_input("Detalle / Copy / Tema de la sesión")
+                detalle_ev = st.text_input("Detalle / Copy / Tema")
                 
                 if st.form_submit_button("Guardar Actividad"):
                     guardar_evento(fecha_ev, cliente_ev, tipo_ev, formato_ev, detalle_ev)
@@ -274,16 +274,15 @@ elif modo == "➕ Registrar Cliente / Evento":
             paquete_c = st.selectbox("Paquete Contratado", list(PAQUETES_KAIRÓS.keys()))
             f_pago = st.date_input("Día que se recibió el Pago", value=date.today())
             
-            # Por defecto el inicio de servicio es el día de pago y termina en 30 días
             f_inicio = f_pago
             f_fin = f_pago + timedelta(days=30)
             
-            st.caption(f"📅 Con esta fecha de pago, el ciclo iniciará el **{f_inicio.strftime('%d/%m/%Y')}** y la fecha de corte/renovación será el **{f_fin.strftime('%d/%m/%Y')}**.")
+            st.caption(f"📅 Ciclo inicial: Del **{f_inicio.strftime('%d/%m/%Y')}** al **{f_fin.strftime('%d/%m/%Y')}**.")
             
             if st.form_submit_button("Registrar Cliente"):
                 if nombre_c.strip():
                     guardar_cliente(nombre_c, paquete_c, f_pago, f_inicio, f_fin)
-                    st.success(f"Cliente '{nombre_c}' registrado correctamente con fecha de pago {f_pago.strftime('%d/%m/%Y')}.")
+                    st.success(f"Cliente '{nombre_c}' registrado correctamente.")
                     st.rerun()
                 else:
                     st.error("Por favor ingresa un nombre válido para la marca.")
