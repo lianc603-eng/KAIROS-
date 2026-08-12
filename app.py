@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import sqlite3
 from datetime import date, datetime, timedelta
+from streamlit_calendar import calendar
 
 st.set_page_config(page_title="Kairós MKT - Control & Calendarios", layout="wide", page_icon="⚡")
 
@@ -66,7 +67,6 @@ def guardar_cliente(nombre, paquete, fecha_pago, inicio, fin):
     c.execute("INSERT INTO clientes (nombre, paquete, fecha_pago, inicio, fin, estado) VALUES (?, ?, ?, ?, ?, 'Activo')",
               (nombre, paquete, str(fecha_pago), str(inicio), str(fin)))
     
-    # Eventos base del ciclo
     c.execute("INSERT INTO eventos (fecha, cliente, tipo, formato, detalle) VALUES (?, ?, ?, ?, ?)",
               (str(fecha_pago), nombre, "Pago Recibido", "N/A", f"Pago inicial - Paquete {paquete}"))
     c.execute("INSERT INTO eventos (fecha, cliente, tipo, formato, detalle) VALUES (?, ?, ?, ?, ?)",
@@ -123,12 +123,10 @@ def agendar_plan_completo(nombre_cliente, fechas_grabacion, calendario_pubs):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     
-    # Agendar Grabaciones
     for i, f in enumerate(fechas_grabacion, 1):
         c.execute("INSERT INTO eventos (fecha, cliente, tipo, formato, detalle) VALUES (?, ?, ?, ?, ?)",
                   (str(f), nombre_cliente, "Día de Grabación", "N/A", f"Sesión de rodaje #{i}"))
         
-    # Agendar Publicaciones
     for item in calendario_pubs:
         c.execute("INSERT INTO eventos (fecha, cliente, tipo, formato, detalle) VALUES (?, ?, ?, ?, ?)",
                   (str(item['fecha']), nombre_cliente, "Publicación", item['formato'], item['detalle']))
@@ -150,7 +148,7 @@ PAQUETES_KAIROS = {
 modo = st.sidebar.radio(
     "Navegación", 
     [
-        "📅 Calendario Agencia (Kairós)", 
+        "📊 Dashboard & Calendario Visual", 
         "👥 Calendario por Cliente", 
         "✏️ Editar / Eliminar Eventos", 
         "🔄 Gestión de Renovaciones", 
@@ -160,39 +158,83 @@ modo = st.sidebar.radio(
 )
 
 # ----------------------------------------------------
-# VISTA 1: CALENDARIO GLOBAL
+# VISTA 1: DASHBOARD & CALENDARIO VISUAL GRÁFICO
 # ----------------------------------------------------
-if modo == "📅 Calendario Agencia (Kairós)":
-    st.header("🗓️ Vista General de Operaciones - Kairós MKT")
-    st.caption("Consolidado de pagos, grabaciones, reuniones, entregas y cortes de ciclo.")
+if modo == "📊 Dashboard & Calendario Visual":
+    st.header("📊 Dashboard Operativo & Calendario Total - Kairós MKT")
+    
+    # 1. METRICAS / DASHBOARD GENERAL
+    if not df_clientes.empty:
+        total_clientes = len(df_clientes)
+        ingresos_est = sum([PAQUETES_KAIROS.get(p, {}).get("precio", 0) for p in df_clientes["paquete"]])
+        
+        # Conteo de eventos este mes
+        mes_actual = date.today().strftime("%Y-%m")
+        df_mes = df_eventos[df_eventos["fecha"].str.startswith(mes_actual)] if not df_eventos.empty else pd.DataFrame()
+        
+        grabaciones_mes = len(df_mes[df_mes["tipo"] == "Día de Grabación"]) if not df_mes.empty else 0
+        pubs_mes = len(df_mes[df_mes["tipo"] == "Publicación"]) if not df_mes.empty else 0
+        
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Clientes Activos", total_clientes)
+        c2.metric("Ingresos Mensuales", f"${ingresos_est:,} MXN")
+        c3.metric("Grabaciones este Mes", grabaciones_mes)
+        c4.metric("Publicaciones este Mes", pubs_mes)
+    else:
+        st.info("Agrega tu primer cliente para ver las métricas del dashboard.")
+
+    st.divider()
+    
+    # 2. CALENDARIO VISUAL
+    st.subheader("🗓️ Calendario Interactivo")
     
     if not df_eventos.empty:
-        col1, col2 = st.columns(2)
-        with col1:
-            tipo_filtro = st.multiselect("Filtrar por Tipo de Evento", options=df_eventos["tipo"].unique(), default=df_eventos["tipo"].unique())
-        with col2:
-            cliente_filtro = st.multiselect("Filtrar por Cliente", options=df_eventos["cliente"].unique(), default=df_eventos["cliente"].unique())
-            
-        df_filtrado = df_eventos[
-            (df_eventos["tipo"].isin(tipo_filtro)) & 
-            (df_eventos["cliente"].isin(cliente_filtro))
-        ].sort_values("fecha")
+        col_f1, col_f2 = st.columns([2, 1])
+        with col_f1:
+            filtro_cli = st.multiselect("Filtrar por Cliente", options=df_eventos["cliente"].unique(), default=df_eventos["cliente"].unique())
         
-        st.dataframe(
-            df_filtrado[["id", "fecha", "cliente", "tipo", "formato", "detalle"]], 
-            column_config={
-                "id": "ID",
-                "fecha": st.column_config.DateColumn("Fecha", format="DD/MM/YYYY"),
-                "cliente": "Cliente",
-                "tipo": "Evento",
-                "formato": "Formato",
-                "detalle": "Detalle / Descripción"
+        df_ev_filtrado = df_eventos[df_eventos["cliente"].isin(filtro_cli)]
+        
+        # Mapeo de colores para el Calendario Visual
+        COLOR_MAP = {
+            "Día de Grabación": "#ef4444",   # Rojo
+            "Publicación": "#3b82f6",        # Azul
+            "Pago Recibido": "#10b981",      # Verde
+            "Inicio de Servicio": "#8b5cf6",  # Morado
+            "Fin de Ciclo": "#f59e0b",       # Naranja
+            "Reunión con Cliente": "#ec4899" # Rosa
+        }
+        
+        calendar_events = []
+        for _, row in df_ev_filtrado.iterrows():
+            color = COLOR_MAP.get(row["tipo"], "#6b7280")
+            titulo = f"{row['cliente']}: {row['detalle']}" if row['formato'] == 'N/A' else f"{row['cliente']} ({row['formato']}): {row['detalle']}"
+            
+            calendar_events.append({
+                "id": str(row["id"]),
+                "title": titulo,
+                "start": row["fecha"],
+                "end": row["fecha"],
+                "color": color
+            })
+            
+        calendar_options = {
+            "editable": False,
+            "selectable": True,
+            "headerToolbar": {
+                "left": "today prev,next",
+                "center": "title",
+                "right": "dayGridMonth,timeGridWeek,listMonth"
             },
-            use_container_width=True,
-            hide_index=True
-        )
+            "initialView": "dayGridMonth"
+        }
+        
+        calendar(events=calendar_events, options=calendar_options, key="kairos_full_calendar")
+        
+        # Leyenda de Colores
+        st.caption("🎨 **Leyenda de Colores**: 🔴 Grabación | 🔵 Publicación | 🟢 Pago Confirmado | 🟣 Inicio de Servicio | 🟠 Fin de Ciclo | 💗 Reunión")
     else:
-        st.info("No hay eventos registrados en la base de datos todavía.")
+        st.info("No hay eventos agendados para desplegar en el calendario visual.")
 
 # ----------------------------------------------------
 # VISTA 2: CALENDARIO POR CLIENTE
@@ -207,7 +249,6 @@ elif modo == "👥 Calendario por Cliente":
         info_c = df_clientes[df_clientes["nombre"] == cliente_sel].iloc[0]
         pkg_info = PAQUETES_KAIROS.get(info_c["paquete"], {"precio": 0, "posts": 0, "reels": 0, "historias": 0, "total": 0})
         
-        # Alerta de corte
         fecha_fin_str = str(info_c["fin"])
         if fecha_fin_str:
             try:
@@ -225,7 +266,6 @@ elif modo == "👥 Calendario por Cliente":
         col4.metric("Inicio Ciclo", str(info_c["inicio"]))
         col5.metric("Fecha Corte", str(info_c["fin"]))
         
-        # Conteo de entregables
         ev_cliente = df_eventos[(df_eventos["cliente"] == cliente_sel) & (df_eventos["tipo"] == "Publicación")] if not df_eventos.empty else pd.DataFrame()
         posts_p = len(ev_cliente[ev_cliente["formato"] == "Post Gráfico"]) if not ev_cliente.empty else 0
         reels_p = len(ev_cliente[ev_cliente["formato"] == "Reel"]) if not ev_cliente.empty else 0
@@ -380,30 +420,25 @@ elif modo == "➕ Registrar Cliente / Evento":
         st.caption(f"📅 Ciclo contractual: **{f_inicio.strftime('%d/%m/%Y')}** al **{f_fin.strftime('%d/%m/%Y')}**.")
         st.info(f" Entregables del paquete **{paquete_c}**: {pkg['posts']} Posts, {pkg['reels']} Reels, {pkg['historias']} Historias | **{pkg['sesiones']} Sesión(es) de Grabación**.")
 
-        # --- CÁLCULO DE GRABACIONES Y PUBLICACIONES ---
         st.markdown("---")
         st.markdown("### 💡 3 Sugerencias de Estrategia de Publicación y Grabación")
         
-        # Grabaciones según el paquete
         if pkg['sesiones'] == 1:
             g_opt_a = [f_inicio + timedelta(days=3)]
             g_opt_b = [f_inicio + timedelta(days=2)]
             g_opt_c = [f_inicio + timedelta(days=4)]
-        else: # Dominio Total (2 sesiones)
+        else:
             g_opt_a = [f_inicio + timedelta(days=3), f_inicio + timedelta(days=17)]
             g_opt_b = [f_inicio + timedelta(days=2), f_inicio + timedelta(days=14)]
             g_opt_c = [f_inicio + timedelta(days=4), f_inicio + timedelta(days=18)]
 
-        # Lógica de distribución de publicaciones (3 Estrategias)
         def generar_calendario_pubs(estrategia, fecha_base, pkg_data):
             list_pubs = []
             total_posts = pkg_data['posts']
             total_reels = pkg_data['reels']
             total_hist = pkg_data['historias']
             
-            # Estrategia A: Lunes / Miércoles / Viernes (Reparto constante)
             if estrategia == "A":
-                # Intercalamos posts, reels e historias
                 dias_offset = [5, 7, 9, 12, 14, 16, 19, 21, 23, 26, 28]
                 for i in range(min(total_posts, len(dias_offset))):
                     list_pubs.append({"fecha": fecha_base + timedelta(days=dias_offset[i % len(dias_offset)]), "formato": "Post Gráfico", "detalle": f"Post Gráfico #{i+1}"})
@@ -414,7 +449,6 @@ elif modo == "➕ Registrar Cliente / Evento":
                     offset = (i * 3) + 5
                     list_pubs.append({"fecha": fecha_base + timedelta(days=min(offset, 29)), "formato": "Historia", "detalle": f"Historia #{i+1}"})
 
-            # Estrategia B: Carga Inicial Fast-Track (Avanza fuerte semanas 1 y 2)
             elif estrategia == "B":
                 for i in range(total_posts):
                     offset = (i * 2) + 4
@@ -426,7 +460,6 @@ elif modo == "➕ Registrar Cliente / Evento":
                     offset = (i * 2) + 3
                     list_pubs.append({"fecha": fecha_base + timedelta(days=min(offset, 28)), "formato": "Historia", "detalle": f"Historia #{i+1}"})
 
-            # Estrategia C: Enfoque Fin de Semana (Jueves a Sábado)
             elif estrategia == "C":
                 for i in range(total_posts):
                     offset = (i * 2.5) + 6
